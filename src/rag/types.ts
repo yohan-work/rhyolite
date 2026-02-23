@@ -27,4 +27,5 @@ export interface IndexData {
   chunks: DocumentChunk[];
   createdAt: string;
   version: string;
+  fileHashes?: Record<string, string>;
 }

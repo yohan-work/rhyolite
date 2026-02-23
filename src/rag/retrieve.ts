@@ -1,6 +1,7 @@
 import { getAllChunks } from '../store/indexStore';
 import { generateEmbedding } from '../store/embeddings';
 import { cosineSimilarity } from '../utils/similarity';
+import { formatSource } from '../utils/format';
 import { logger } from '../utils/logger';
 import { SearchResult } from './types';
 import { config } from '../config/env';
@@ -39,17 +40,8 @@ export function buildContext(results: SearchResult[]): string {
 
   return results
     .map((r, i) => {
-      const meta = r.chunk.metadata;
-      const source = formatSource(meta);
+      const source = formatSource(r.chunk.metadata);
       return `[문서 ${i + 1}] (출처: ${source})\n${r.chunk.content}`;
     })
     .join('\n\n---\n\n');
-}
-
-function formatSource(meta: { fileName: string; section?: string; sheetName?: string; rowIndex?: number }): string {
-  const parts = [meta.fileName];
-  if (meta.sheetName) parts.push(`시트: ${meta.sheetName}`);
-  if (meta.rowIndex !== undefined) parts.push(`행: ${meta.rowIndex}`);
-  if (meta.section) parts.push(`섹션: ${meta.section}`);
-  return parts.join(' / ');
 }

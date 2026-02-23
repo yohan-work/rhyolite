@@ -1,11 +1,14 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { parseTxt } from '../parsers/txtParser';
 import { parseMd } from '../parsers/mdParser';
 import { parseDocx } from '../parsers/docxParser';
 import { parseXlsx } from '../parsers/xlsxParser';
+import { parsePdf } from '../parsers/pdfParser';
+import { parsePptx } from '../parsers/pptxParser';
 import { generateEmbeddings } from '../store/embeddings';
-import { saveIndex } from '../store/indexStore';
+import { loadIndex, saveIndex } from '../store/indexStore';
 import { DocumentChunk, IndexData } from './types';
 import { logger } from '../utils/logger';
 
@@ -16,10 +19,17 @@ const EXTENSION_MAP: Record<string, (filePath: string) => DocumentChunk[] | Prom
   '.md': parseMd,
   '.docx': parseDocx,
   '.xlsx': parseXlsx,
+  '.pdf': parsePdf,
+  '.pptx': parsePptx,
 };
 
-/** uploads 폴더의 모든 지원 문서를 파싱 → 임베딩 → 인덱스 저장 */
-export async function ingestDocuments(): Promise<void> {
+function computeFileHash(filePath: string): string {
+  const content = fs.readFileSync(filePath);
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+/** uploads 폴더의 문서를 증분 인덱싱 (변경된 파일만 재처리) */
+export async function ingestDocuments(forceAll = false): Promise<void> {
   if (!fs.existsSync(UPLOADS_DIR)) {
     fs.mkdirSync(UPLOADS_DIR, { recursive: true });
     logger.warn(`uploads 폴더가 없어 생성했습니다: ${UPLOADS_DIR}`);
@@ -35,46 +45,74 @@ export async function ingestDocuments(): Promise<void> {
     return;
   }
 
-  logger.info(`${files.length}개 문서 발견: ${files.join(', ')}`);
+  const existingIndex = loadIndex();
+  const existingHashes = existingIndex.fileHashes ?? {};
 
-  const allChunks: DocumentChunk[] = [];
+  const currentHashes: Record<string, string> = {};
+  const changedFiles: string[] = [];
+  const unchangedFiles: string[] = [];
 
   for (const file of files) {
     const filePath = path.join(UPLOADS_DIR, file);
+    const hash = computeFileHash(filePath);
+    currentHashes[file] = hash;
+
+    if (forceAll || existingHashes[file] !== hash) {
+      changedFiles.push(file);
+    } else {
+      unchangedFiles.push(file);
+    }
+  }
+
+  const deletedFiles = Object.keys(existingHashes).filter((f) => !currentHashes[f]);
+
+  if (changedFiles.length === 0 && deletedFiles.length === 0) {
+    logger.info('변경된 문서가 없습니다. 인덱싱을 건너뜁니다.');
+    return;
+  }
+
+  logger.info(`문서 현황 - 변경/신규: ${changedFiles.length}개, 유지: ${unchangedFiles.length}개, 삭제: ${deletedFiles.length}개`);
+
+  const retainedChunks = existingIndex.chunks.filter(
+    (c) => unchangedFiles.includes(c.metadata.fileName) && c.embedding.length > 0,
+  );
+
+  const newChunks: DocumentChunk[] = [];
+  for (const file of changedFiles) {
+    const filePath = path.join(UPLOADS_DIR, file);
     const ext = path.extname(file).toLowerCase();
     const parser = EXTENSION_MAP[ext];
-
     if (!parser) continue;
 
     try {
       logger.info(`파싱 중: ${file}`);
       const chunks = await parser(filePath);
-      allChunks.push(...chunks);
+      newChunks.push(...chunks);
       logger.info(`  → ${chunks.length}개 청크 생성`);
     } catch (error) {
       logger.error(`파싱 실패: ${file}`, error);
     }
   }
 
-  if (allChunks.length === 0) {
-    logger.warn('파싱된 청크가 없습니다.');
-    return;
+  if (newChunks.length > 0) {
+    logger.info(`${newChunks.length}개 신규 청크에 대한 임베딩 생성 시작...`);
+    const texts = newChunks.map((c) => c.content);
+    const embeddings = await generateEmbeddings(texts);
+
+    for (let i = 0; i < newChunks.length; i++) {
+      newChunks[i].embedding = embeddings[i];
+    }
   }
 
-  logger.info(`총 ${allChunks.length}개 청크에 대한 임베딩 생성 시작...`);
-  const texts = allChunks.map((c) => c.content);
-  const embeddings = await generateEmbeddings(texts);
-
-  for (let i = 0; i < allChunks.length; i++) {
-    allChunks[i].embedding = embeddings[i];
-  }
+  const allChunks = [...retainedChunks, ...newChunks];
 
   const indexData: IndexData = {
     chunks: allChunks,
     createdAt: new Date().toISOString(),
     version: '1.0.0',
+    fileHashes: currentHashes,
   };
 
   saveIndex(indexData);
-  logger.info(`인덱싱 완료! 총 ${allChunks.length}개 청크가 저장되었습니다.`);
+  logger.info(`인덱싱 완료! 총 ${allChunks.length}개 청크 (유지: ${retainedChunks.length}, 신규: ${newChunks.length})`);
 }
