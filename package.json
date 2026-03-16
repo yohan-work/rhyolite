@@ -23,13 +23,18 @@
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@slack/bolt": "^4.1.0",
+    "cors": "^2.8.6",
     "dotenv": "^16.4.7",
+    "express": "^5.2.1",
     "jszip": "^3.10.1",
     "mammoth": "^1.8.0",
+    "neo4j-driver": "^6.0.1",
     "pdf-parse": "^2.4.5",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/jszip": "^3.4.0",
     "@types/node": "^22.10.0",
