@@ -48,7 +48,7 @@ function isRetryableError(error: unknown): boolean {
     const msg = error.message.toLowerCase();
     if (msg.includes('429') || msg.includes('rate limit')) return true;
     if (msg.includes('500') || msg.includes('502') || msg.includes('503') || msg.includes('504')) return true;
-    if (msg.includes('timeout') || msg.includes('econnreset') || msg.includes('econnrefused')) return true;
+    if (msg.includes('timeout') || msg.includes('econnreset') || msg.includes('econnrefused') || msg.includes('enotfound')) return true;
   }
   return false;
 }
