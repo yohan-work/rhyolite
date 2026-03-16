@@ -1,40 +1,29 @@
-import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
+import { Ollama } from 'ollama';
 import { config } from '../config/env';
 import { logger } from '../utils/logger';
 import { withRetry } from '../utils/retry';
 
-let genAIInstance: GoogleGenerativeAI | null = null;
-let embeddingModel: GenerativeModel | null = null;
+let ollamaInstance: Ollama | null = null;
 
-function getEmbeddingModel(): GenerativeModel {
-  if (!embeddingModel) {
-    if (!genAIInstance) {
-      genAIInstance = new GoogleGenerativeAI(config.geminiApiKey);
-    }
-    embeddingModel = genAIInstance.getGenerativeModel({ model: 'gemini-embedding-001' });
+export function getOllama(): Ollama {
+  if (!ollamaInstance) {
+    ollamaInstance = new Ollama({ host: config.ollamaBaseUrl });
   }
-  return embeddingModel;
-}
-
-export function getGenAI(): GoogleGenerativeAI {
-  if (!genAIInstance) {
-    genAIInstance = new GoogleGenerativeAI(config.geminiApiKey);
-  }
-  return genAIInstance;
+  return ollamaInstance;
 }
 
 export async function generateEmbedding(text: string): Promise<number[]> {
-  if (config.useMockLlm || !config.geminiApiKey) {
+  if (config.useMockLlm) {
     return generateMockEmbedding(text);
   }
-  return generateGeminiEmbedding(text);
+  return generateOllamaEmbedding(text);
 }
 
 export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
-  if (config.useMockLlm || !config.geminiApiKey) {
+  if (config.useMockLlm) {
     return texts.map(generateMockEmbedding);
   }
-  return generateGeminiEmbeddings(texts);
+  return generateOllamaEmbeddings(texts);
 }
 
 function generateMockEmbedding(text: string): number[] {
@@ -65,33 +54,27 @@ function generateMockEmbedding(text: string): number[] {
   return vec;
 }
 
-async function generateGeminiEmbedding(text: string): Promise<number[]> {
-  const model = getEmbeddingModel();
+async function generateOllamaEmbedding(text: string): Promise<number[]> {
+  const ollama = getOllama();
   return withRetry(async () => {
-    const result = await model.embedContent(text);
-    return result.embedding.values;
-  }, 'Gemini 임베딩');
+    const response = await ollama.embeddings({
+      model: config.ollamaEmbeddingModel,
+      prompt: text,
+    });
+    return response.embedding;
+  }, 'Ollama 임베딩');
 }
 
-async function generateGeminiEmbeddings(texts: string[]): Promise<number[][]> {
-  const model = getEmbeddingModel();
+async function generateOllamaEmbeddings(texts: string[]): Promise<number[][]> {
   const allEmbeddings: number[][] = [];
-  const BATCH_SIZE = 20;
-
-  for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-    const batch = texts.slice(i, i + BATCH_SIZE);
-    logger.info(`임베딩 생성 중... (${i + 1}~${Math.min(i + BATCH_SIZE, texts.length)} / ${texts.length})`);
-
-    const batchResult = await withRetry(
-      () => model.batchEmbedContents({
-        requests: batch.map((text) => ({ content: { parts: [{ text }], role: 'user' } })),
-      }),
-      `Gemini 배치 임베딩 (${i + 1}~${Math.min(i + BATCH_SIZE, texts.length)})`,
-    );
-
-    for (const emb of batchResult.embeddings) {
-      allEmbeddings.push(emb.values);
+  
+  // Ollama는 batch 임베딩 API를 공식적으로 지원하지 않으므로 순차적으로 처리
+  for (let i = 0; i < texts.length; i++) {
+    if (i % 10 === 0) {
+      logger.info(`임베딩 생성 중... (${i + 1}/${texts.length})`);
     }
+    const embedding = await generateOllamaEmbedding(texts[i]);
+    allEmbeddings.push(embedding);
   }
 
   return allEmbeddings;

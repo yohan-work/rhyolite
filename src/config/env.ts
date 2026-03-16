@@ -6,7 +6,9 @@ dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 export interface AppConfig {
   slackBotToken: string;
   slackAppToken: string;
-  geminiApiKey: string;
+  ollamaBaseUrl: string;
+  ollamaModel: string;
+  ollamaEmbeddingModel: string;
   useMockLlm: boolean;
   topK: number;
   maxInputLength: number;
@@ -30,19 +32,17 @@ function parsePositiveInt(raw: string | undefined, defaultValue: number, name: s
 }
 
 const useMockLlm = process.env.USE_MOCK_LLM === 'true';
-const geminiApiKey = process.env.GEMINI_API_KEY ?? '';
-
-if (!useMockLlm && !geminiApiKey) {
-  console.warn(
-    '[WARN] GEMINI_API_KEY가 설정되지 않았습니다. Mock LLM 모드로 자동 전환합니다.',
-  );
-}
+const ollamaBaseUrl = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
+const ollamaModel = process.env.OLLAMA_MODEL ?? 'qwen2.5-coder:7b';
+const ollamaEmbeddingModel = process.env.OLLAMA_EMBEDDING_MODEL ?? 'embeddinggemma:latest';
 
 export const config: AppConfig = {
   slackBotToken: requireEnv('SLACK_BOT_TOKEN'),
   slackAppToken: requireEnv('SLACK_APP_TOKEN'),
-  geminiApiKey,
-  useMockLlm: useMockLlm || !geminiApiKey,
+  ollamaBaseUrl,
+  ollamaModel,
+  ollamaEmbeddingModel,
+  useMockLlm,
   topK: parsePositiveInt(process.env.TOP_K, 5, 'TOP_K'),
   maxInputLength: parsePositiveInt(process.env.MAX_INPUT_LENGTH, 2000, 'MAX_INPUT_LENGTH'),
 };
