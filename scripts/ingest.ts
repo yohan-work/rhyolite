@@ -10,7 +10,8 @@ async function main(): Promise<void> {
     logger.info('=== 문서 증분 인덱싱 시작 ===');
   }
 
-  await ingestDocuments(forceAll);
+  const summary = await ingestDocuments(forceAll);
+  logger.info('인덱싱 요약', summary);
   logger.info('=== 문서 인덱싱 완료 ===');
 }
 
