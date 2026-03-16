@@ -11,6 +11,8 @@ import { generateEmbeddings } from '../store/embeddings';
 import { loadIndex, saveIndex } from '../store/indexStore';
 import { DocumentChunk, IndexData } from './types';
 import { logger } from '../utils/logger';
+import { extractGraphFromText } from './graph';
+import { saveGraphData, clearGraphData, closeNeo4jDriver } from '../store/neo4jStore';
 
 const UPLOADS_DIR = path.resolve(process.cwd(), 'uploads');
 
@@ -43,6 +45,11 @@ export async function ingestDocuments(forceAll = false): Promise<void> {
   if (files.length === 0) {
     logger.warn('uploads 폴더에 처리할 문서가 없습니다.');
     return;
+  }
+
+  if (forceAll) {
+    logger.info('전체 인덱싱 모드: Neo4j 그래프 데이터를 초기화합니다.');
+    await clearGraphData();
   }
 
   const existingIndex = loadIndex();
@@ -102,6 +109,27 @@ export async function ingestDocuments(forceAll = false): Promise<void> {
     for (let i = 0; i < newChunks.length; i++) {
       newChunks[i].embedding = embeddings[i];
     }
+
+    logger.info(`${newChunks.length}개 신규 청크에 대한 지식 그래프 추출 시작...`);
+    for (let i = 0; i < newChunks.length; i++) {
+      const chunk = newChunks[i];
+      try {
+        logger.info(`그래프 추출 중 (${i + 1}/${newChunks.length}): ${chunk.metadata.fileName}`);
+        const graphData = await extractGraphFromText(chunk.content);
+        
+        if (graphData.entities.length > 0) {
+          await saveGraphData(graphData);
+          logger.info(`  → 추출 완료: 엔티티 ${graphData.entities.length}개, 관계 ${graphData.relationships.length}개`);
+        }
+        
+        // 무료 티어 Rate Limit 방지를 위해 청크 간 3초 대기
+        if (i < newChunks.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+      } catch (error) {
+        logger.error(`그래프 추출 실패 (${chunk.metadata.fileName}):`, error);
+      }
+    }
   }
 
   const allChunks = [...retainedChunks, ...newChunks];
@@ -115,4 +143,6 @@ export async function ingestDocuments(forceAll = false): Promise<void> {
 
   saveIndex(indexData);
   logger.info(`인덱싱 완료! 총 ${allChunks.length}개 청크 (유지: ${retainedChunks.length}, 신규: ${newChunks.length})`);
+  
+  await closeNeo4jDriver();
 }

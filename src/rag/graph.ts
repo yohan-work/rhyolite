@@ -1,8 +1,8 @@
-import { GoogleGenerativeAI, Schema, SchemaType } from '@google/generative-ai';
+import { Ollama } from 'ollama';
 import { config } from '../config/env';
 import { logger } from '../utils/logger';
-
-const genAI = new GoogleGenerativeAI(config.geminiApiKey);
+import { withRetry } from '../utils/retry';
+import { getOllama } from '../store/embeddings';
 
 export interface Entity {
   id: string;
@@ -23,39 +23,6 @@ export interface GraphExtractionResult {
   relationships: Relationship[];
 }
 
-const graphExtractionSchema: Schema = {
-  type: SchemaType.OBJECT,
-  properties: {
-    entities: {
-      type: SchemaType.ARRAY,
-      items: {
-        type: SchemaType.OBJECT,
-        properties: {
-          id: { type: SchemaType.STRING, description: 'Unique identifier for the entity (e.g., entity_1)' },
-          type: { type: SchemaType.STRING, description: 'Type of the entity (e.g., Person, Organization, Location, Concept, Technology)' },
-          name: { type: SchemaType.STRING, description: 'Name of the entity' },
-          description: { type: SchemaType.STRING, description: 'Brief description of the entity' },
-        },
-        required: ['id', 'type', 'name'],
-      },
-    },
-    relationships: {
-      type: SchemaType.ARRAY,
-      items: {
-        type: SchemaType.OBJECT,
-        properties: {
-          sourceId: { type: SchemaType.STRING, description: 'ID of the source entity' },
-          targetId: { type: SchemaType.STRING, description: 'ID of the target entity' },
-          type: { type: SchemaType.STRING, description: 'Type of the relationship (e.g., WORKS_FOR, LOCATED_IN, RELATES_TO, USES)' },
-          description: { type: SchemaType.STRING, description: 'Brief description of the relationship' },
-        },
-        required: ['sourceId', 'targetId', 'type'],
-      },
-    },
-  },
-  required: ['entities', 'relationships'],
-};
-
 /**
  * 텍스트 청크에서 개체와 관계를 추출합니다.
  */
@@ -66,15 +33,7 @@ export async function extractGraphFromText(text: string): Promise<GraphExtractio
   }
 
   try {
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      generationConfig: {
-        temperature: 0.1,
-        responseMimeType: 'application/json',
-        responseSchema: graphExtractionSchema,
-      },
-    });
-
+    const ollama = getOllama();
     const prompt = `
 다음 텍스트에서 주요 개체(Entity)와 그들 간의 관계(Relationship)를 추출하세요.
 
@@ -87,10 +46,32 @@ ${text}
 2. 관계 유형(type)은 대문자와 밑줄을 사용하세요 (예: WORKS_FOR, LOCATED_IN, RELATES_TO, USES, CREATED, PART_OF).
 3. 각 개체는 고유한 id를 가져야 하며, 관계는 이 id를 사용하여 연결해야 합니다.
 4. 텍스트에 명시적으로 나타난 정보만 추출하세요.
+
+반드시 아래 JSON 형식으로만 응답하세요. 다른 설명은 포함하지 마세요.
+{
+  "entities": [
+    { "id": "entity_1", "type": "Person", "name": "홍길동", "description": "개발자" }
+  ],
+  "relationships": [
+    { "sourceId": "entity_1", "targetId": "entity_2", "type": "WORKS_FOR", "description": "소속됨" }
+  ]
+}
 `;
 
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text();
+    const result = await withRetry(
+      () => ollama.generate({
+        model: config.ollamaModel,
+        prompt: prompt,
+        format: 'json',
+        options: {
+          temperature: 0.1,
+        }
+      }),
+      'Ollama 그래프 추출',
+      { maxRetries: 3, baseDelayMs: 2000, maxDelayMs: 10000 }
+    );
+    
+    const responseText = result.response;
     
     if (!responseText) {
       throw new Error('LLM 응답이 비어있습니다.');
@@ -108,18 +89,6 @@ export interface QueryEntityExtractionResult {
   entities: string[];
 }
 
-const queryExtractionSchema: Schema = {
-  type: SchemaType.OBJECT,
-  properties: {
-    entities: {
-      type: SchemaType.ARRAY,
-      items: { type: SchemaType.STRING },
-      description: 'List of entity names extracted from the query',
-    },
-  },
-  required: ['entities'],
-};
-
 /**
  * 사용자 질문에서 주요 개체(키워드)를 추출합니다.
  */
@@ -129,24 +98,33 @@ export async function extractEntitiesFromQuery(query: string): Promise<string[]>
   }
 
   try {
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      generationConfig: {
-        temperature: 0.1,
-        responseMimeType: 'application/json',
-        responseSchema: queryExtractionSchema,
-      },
-    });
-
+    const ollama = getOllama();
     const prompt = `
 다음 질문에서 검색에 유용할 주요 개체(Entity, 키워드, 사람 이름, 조직, 기술 등)를 추출하세요.
 
 [질문]
 ${query}
+
+반드시 아래 JSON 형식으로만 응답하세요. 다른 설명은 포함하지 마세요.
+{
+  "entities": ["키워드1", "키워드2"]
+}
 `;
 
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text();
+    const result = await withRetry(
+      () => ollama.generate({
+        model: config.ollamaModel,
+        prompt: prompt,
+        format: 'json',
+        options: {
+          temperature: 0.1,
+        }
+      }),
+      'Ollama 질문 개체 추출',
+      { maxRetries: 3, baseDelayMs: 2000, maxDelayMs: 10000 }
+    );
+    
+    const responseText = result.response;
     
     if (!responseText) {
       return [];

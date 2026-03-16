@@ -4,7 +4,8 @@ import { withRetry } from '../utils/retry';
 import { formatSources } from '../utils/format';
 import { SYSTEM_PROMPT, buildUserPrompt } from './prompts';
 import { SearchResult, AnswerResult } from './types';
-import { buildContext } from './retrieve';
+import { buildContext, HybridSearchResult } from './retrieve';
+import { getOllama } from '../store/embeddings';
 
 export interface ConversationMessage {
   role: 'user' | 'assistant';
@@ -14,17 +15,20 @@ export interface ConversationMessage {
 /** 검색 결과를 기반으로 LLM(또는 Mock)으로 답변 생성 */
 export async function generateAnswer(
   question: string,
-  searchResults: SearchResult[],
+  searchResults: HybridSearchResult | SearchResult[],
   history?: ConversationMessage[],
 ): Promise<AnswerResult> {
   const context = buildContext(searchResults);
-  const sources = searchResults.map((r) => r.chunk.metadata);
+  
+  const isHybrid = !Array.isArray(searchResults);
+  const vectorResults = isHybrid ? searchResults.vectorResults : searchResults;
+  const sources = vectorResults.map((r) => r.chunk.metadata);
 
-  if (config.useMockLlm || !config.geminiApiKey) {
+  if (config.useMockLlm) {
     return generateMockAnswer(question, context, sources);
   }
 
-  return generateGeminiAnswer(question, context, sources, history);
+  return generateOllamaAnswer(question, context, sources, history);
 }
 
 function generateMockAnswer(
@@ -51,34 +55,32 @@ function generateMockAnswer(
   return { answer, sources };
 }
 
-async function generateGeminiAnswer(
+async function generateOllamaAnswer(
   question: string,
   context: string,
   sources: AnswerResult['sources'],
   history?: ConversationMessage[],
 ): Promise<AnswerResult> {
-  const { getGenAI } = await import('../store/embeddings');
-  const genAI = getGenAI();
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    systemInstruction: SYSTEM_PROMPT,
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 1024,
-    },
-  });
-
+  const ollama = getOllama();
   const userPrompt = buildUserPrompt(context, question, history);
 
   try {
     const result = await withRetry(
-      () => model.generateContent(userPrompt),
-      'Gemini 답변 생성',
+      () => ollama.generate({
+        model: config.ollamaModel,
+        system: SYSTEM_PROMPT,
+        prompt: userPrompt,
+        options: {
+          temperature: 0.2,
+          num_predict: 1024,
+        }
+      }),
+      'Ollama 답변 생성',
     );
-    const answer = result.response.text() ?? '답변을 생성하지 못했습니다.';
+    const answer = result.response ?? '답변을 생성하지 못했습니다.';
     return { answer, sources };
   } catch (error) {
-    logger.error('Gemini API 호출 실패 (재시도 소진)', error);
+    logger.error('Ollama API 호출 실패 (재시도 소진)', error);
     return {
       answer: '답변 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.',
       sources: [],
