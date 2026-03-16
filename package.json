@@ -21,7 +21,6 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
     "@slack/bolt": "^4.1.0",
     "cors": "^2.8.6",
     "dotenv": "^16.4.7",
@@ -29,6 +28,7 @@
     "jszip": "^3.10.1",
     "mammoth": "^1.8.0",
     "neo4j-driver": "^6.0.1",
+    "ollama": "^0.6.3",
     "pdf-parse": "^2.4.5",
     "xlsx": "^0.18.5"
   },
