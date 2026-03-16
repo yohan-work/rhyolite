@@ -11,6 +11,14 @@ import { getSubgraphContext } from '../store/neo4jStore';
 export interface HybridSearchResult {
   vectorResults: SearchResult[];
   graphContext: string;
+  queryEntities: string[];
+}
+
+function computeEntityOverlapScore(content: string, entities: string[]): number {
+  if (entities.length === 0) return 0;
+  const lowered = content.toLowerCase();
+  const hitCount = entities.filter((entity) => lowered.includes(entity.toLowerCase())).length;
+  return hitCount / entities.length;
 }
 
 /**
@@ -19,6 +27,7 @@ export interface HybridSearchResult {
 export async function retrieveHybrid(query: string, topK?: number): Promise<HybridSearchResult> {
   const k = topK ?? config.topK;
   const chunks = getAllChunks();
+  let queryEntities: string[] = [];
 
   let vectorResults: SearchResult[] = [];
   
@@ -27,23 +36,23 @@ export async function retrieveHybrid(query: string, topK?: number): Promise<Hybr
   } else {
     const queryEmbedding = await generateEmbedding(query);
 
-    const scored: SearchResult[] = chunks.map((chunk) => ({
+    const scored = chunks.map((chunk) => ({
       chunk,
       score: cosineSimilarity(queryEmbedding, chunk.embedding),
     }));
 
     scored.sort((a, b) => b.score - a.score);
-    vectorResults = scored.slice(0, k);
+    vectorResults = scored.slice(0, k).map(({ chunk, score }) => ({ chunk, score }));
     logger.info(`벡터 검색 완료: 상위 ${vectorResults.length}개 문서 (총 ${chunks.length}개 중)`);
   }
 
   // 지식 그래프 검색
   let graphContext = '';
   try {
-    const entities = await extractEntitiesFromQuery(query);
-    if (entities.length > 0) {
-      logger.info(`질문에서 추출된 개체: ${entities.join(', ')}`);
-      graphContext = await getSubgraphContext(entities);
+    queryEntities = await extractEntitiesFromQuery(query);
+    if (queryEntities.length > 0) {
+      logger.info(`질문에서 추출된 개체: ${queryEntities.join(', ')}`);
+      graphContext = await getSubgraphContext(queryEntities, config.graphMaxHops);
       if (graphContext) {
         logger.info('지식 그래프 컨텍스트를 성공적으로 조회했습니다.');
       }
@@ -52,7 +61,22 @@ export async function retrieveHybrid(query: string, topK?: number): Promise<Hybr
     logger.error('하이브리드 검색 중 그래프 조회 실패:', error);
   }
 
-  return { vectorResults, graphContext };
+  // 그래프 개체 정보를 얻은 뒤 최종 rerank를 다시 수행합니다.
+  if (vectorResults.length > 0 && queryEntities.length > 0) {
+    vectorResults = vectorResults
+      .map((result) => {
+        const overlapScore = computeEntityOverlapScore(result.chunk.content, queryEntities);
+        const rerankScore =
+          result.score * (1 - config.rerankEntityWeight) + overlapScore * config.rerankEntityWeight;
+        return {
+          ...result,
+          score: rerankScore,
+        };
+      })
+      .sort((a, b) => b.score - a.score);
+  }
+
+  return { vectorResults, graphContext, queryEntities };
 }
 
 /**
