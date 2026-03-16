@@ -2,7 +2,7 @@ import { App } from '@slack/bolt';
 import { config } from '../config/env';
 import { logger } from '../utils/logger';
 import { formatSources } from '../utils/format';
-import { retrieveTopK } from '../rag/retrieve';
+import { retrieveHybrid } from '../rag/retrieve';
 import { generateAnswer } from '../rag/answer';
 import { getHistory, addMessage } from '../store/conversationStore';
 
@@ -34,7 +34,7 @@ export function registerHandlers(app: App): void {
       const history = getHistory(threadTs);
       addMessage(threadTs, 'user', question);
 
-      const searchResults = await retrieveTopK(question);
+      const searchResults = await retrieveHybrid(question);
       const { answer, sources } = await generateAnswer(question, searchResults, history);
 
       addMessage(threadTs, 'assistant', answer);
