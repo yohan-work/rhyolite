@@ -1,4 +1,7 @@
 # Rhyolite - Slack in R
+## openclaw data[pending]
+<img width="839" height="476" alt="image" src="https://github.com/user-attachments/assets/451bb50f-c757-4d2a-85d6-d9630279148b" />
+
 ## slack data
 <img width="1563" height="993" alt="스크린샷 2026-03-17 오후 6 04 47" src="https://github.com/user-attachments/assets/52c9e4c4-fad0-4c9b-aa05-3995cac0ac1f" />
 
